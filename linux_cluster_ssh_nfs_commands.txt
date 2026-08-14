@@ -1,0 +1,334 @@
+LINUX CLUSTER + PASSWORDLESS SSH + NFS
+==========================================
+
+Example topology
+-----------------
+node1 = 192.168.1.101  (Master + NFS Server)
+node2 = 192.168.1.102  (Worker)
+node3 = 192.168.1.103  (Worker)
+
+Replace the example IP addresses and "user" with your actual values.
+
+IMPORTANT:
+- Run commands as the indicated machine.
+- Commands beginning with "sudo" require sudo privileges.
+- Passwordless SSH setup below makes node1 -> node2/node3 passwordless.
+- If you need SSH between every pair of nodes, repeat the key-generation/copy process from each node.
+
+STEP 1 — SET HOSTNAMES
+======================
+
+ON node1:
+    sudo hostnamectl set-hostname node1
+    hostname
+
+ON node2:
+    sudo hostnamectl set-hostname node2
+    hostname
+
+ON node3:
+    sudo hostnamectl set-hostname node3
+    hostname
+
+
+STEP 2 — CONFIGURE /etc/hosts
+=============================
+
+ON node1, node2, AND node3:
+    sudo nano /etc/hosts
+
+Add these lines:
+    192.168.1.101 node1
+    192.168.1.102 node2
+    192.168.1.103 node3
+
+Test from each node:
+    ping -c 3 node1
+    ping -c 3 node2
+    ping -c 3 node3
+
+
+STEP 3 — INSTALL SSH
+====================
+
+ON node1:
+    sudo apt update
+    sudo apt install openssh-server openssh-client -y
+    sudo systemctl enable --now ssh
+    sudo systemctl status ssh
+
+ON node2:
+    sudo apt update
+    sudo apt install openssh-server openssh-client -y
+    sudo systemctl enable --now ssh
+    sudo systemctl status ssh
+
+ON node3:
+    sudo apt update
+    sudo apt install openssh-server openssh-client -y
+    sudo systemctl enable --now ssh
+    sudo systemctl status ssh
+
+
+STEP 4 — CREATE SSH KEY
+=======================
+
+ON node1:
+
+    ssh-keygen -t ed25519
+
+When prompted:
+- Press Enter to accept the default file location.
+- For passwordless SSH, leave the passphrase empty and press Enter.
+- Press Enter again when asked to confirm.
+
+Verify:
+    ls -la ~/.ssh/
+
+
+STEP 5 — COPY SSH KEY TO WORKERS
+================================
+
+ON node1:
+
+    ssh-copy-id user@node2
+    ssh-copy-id user@node3
+
+Enter the password when prompted. This is normally required only during setup.
+
+
+STEP 6 — TEST PASSWORDLESS SSH
+==============================
+
+ON node1:
+
+    ssh user@node2
+
+If successful, you should enter node2 without a password.
+
+Leave node2:
+    exit
+
+Test node3:
+    ssh user@node3
+
+Leave node3:
+    exit
+
+
+OPTIONAL — PASSWORDLESS SSH BETWEEN ALL NODES
+==============================================
+
+If every node must SSH to every other node without a password:
+
+ON node2:
+    ssh-keygen -t ed25519
+    ssh-copy-id user@node1
+    ssh-copy-id user@node3
+
+ON node3:
+    ssh-keygen -t ed25519
+    ssh-copy-id user@node1
+    ssh-copy-id user@node2
+
+Test the required directions with:
+    ssh user@node1
+    ssh user@node2
+    ssh user@node3
+
+
+STEP 7 — INSTALL NFS SERVER
+===========================
+
+ON node1 ONLY:
+
+    sudo apt update
+    sudo apt install nfs-kernel-server -y
+    sudo systemctl enable --now nfs-server
+    sudo systemctl status nfs-server
+
+
+STEP 8 — CREATE NFS SHARED DIRECTORY
+====================================
+
+ON node1:
+
+    sudo mkdir -p /srv/nfs/share
+    sudo chown $USER:$USER /srv/nfs/share
+
+Create a test file:
+    echo "Hello from NFS server" > /srv/nfs/share/test.txt
+
+
+STEP 9 — CONFIGURE NFS EXPORTS
+==============================
+
+ON node1:
+
+    sudo nano /etc/exports
+
+Add:
+    /srv/nfs/share 192.168.1.0/24(rw,sync,no_subtree_check)
+
+Save and exit.
+
+
+STEP 10 — APPLY NFS EXPORT
+==========================
+
+ON node1:
+
+    sudo exportfs -rav
+    sudo exportfs -v
+
+The exported directory should appear in the output.
+
+
+STEP 11 — INSTALL NFS CLIENT
+============================
+
+ON node2:
+    sudo apt update
+    sudo apt install nfs-common -y
+
+ON node3:
+    sudo apt update
+    sudo apt install nfs-common -y
+
+
+STEP 12 — CREATE NFS MOUNT POINT
+================================
+
+ON node2:
+    sudo mkdir -p /mnt/nfs
+
+ON node3:
+    sudo mkdir -p /mnt/nfs
+
+
+STEP 13 — MOUNT NFS SHARE
+=========================
+
+ON node2:
+    sudo mount node1:/srv/nfs/share /mnt/nfs
+
+ON node3:
+    sudo mount node1:/srv/nfs/share /mnt/nfs
+
+
+STEP 14 — VERIFY NFS MOUNT
+==========================
+
+ON node2:
+    df -h /mnt/nfs
+    ls -la /mnt/nfs
+    cat /mnt/nfs/test.txt
+
+ON node3:
+    df -h /mnt/nfs
+    ls -la /mnt/nfs
+    cat /mnt/nfs/test.txt
+
+Expected test output:
+    Hello from NFS server
+
+
+STEP 15 — TEST SHARED STORAGE
+=============================
+
+ON node2:
+
+    echo "File created on node2" | sudo tee /mnt/nfs/node2.txt
+
+ON node3:
+
+    cat /mnt/nfs/node2.txt
+
+Expected:
+    File created on node2
+
+This confirms node2 and node3 are accessing the same NFS storage.
+
+
+STEP 16 — MAKE NFS MOUNT AUTOMATIC AFTER REBOOT
+================================================
+
+ON node2:
+
+    sudo nano /etc/fstab
+
+Add:
+    node1:/srv/nfs/share /mnt/nfs nfs defaults,_netdev 0 0
+
+Test:
+    sudo umount /mnt/nfs
+    sudo mount -a
+    df -h /mnt/nfs
+
+
+ON node3:
+
+    sudo nano /etc/fstab
+
+Add:
+    node1:/srv/nfs/share /mnt/nfs nfs defaults,_netdev 0 0
+
+Test:
+    sudo umount /mnt/nfs
+    sudo mount -a
+    df -h /mnt/nfs
+
+
+FINAL VERIFICATION
+==================
+
+ON node1:
+
+    ssh user@node2 hostname
+    ssh user@node3 hostname
+
+Expected:
+    node2
+    node3
+
+ON node2:
+
+    ls -la /mnt/nfs
+    echo "Hello from node2" | sudo tee /mnt/nfs/node2-test.txt
+
+ON node3:
+
+    cat /mnt/nfs/node2-test.txt
+
+Expected:
+    Hello from node2
+
+
+FINAL SETUP
+===========
+
+node1
+  IP: 192.168.1.101
+  Role: Master + NFS Server
+  Shared directory: /srv/nfs/share
+
+node2
+  IP: 192.168.1.102
+  Role: Worker
+  NFS mount: /mnt/nfs
+
+node3
+  IP: 192.168.1.103
+  Role: Worker
+  NFS mount: /mnt/nfs
+
+Communication:
+  node1 -> node2: passwordless SSH
+  node1 -> node3: passwordless SSH
+
+Storage:
+  node1:/srv/nfs/share
+          |
+          +--> node2:/mnt/nfs
+          |
+          +--> node3:/mnt/nfs
